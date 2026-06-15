@@ -41,194 +41,195 @@ for grp, t_dict in WORLD_CUP_48_TEAMS.items():
 ALL_CH_TEAMS.sort()
 GLOBAL_AVG_GOALS = 1.35 
 
-# 全球國家硬實力雙維度特徵：[進攻係數, 防守係數]
+# 【徹底重校版】全球國家硬實力雙維度特徵：[進攻係數, 防守係數]
+# 這裡已將弱隊（如維德角、古拉索）的虚高參數全部下修，確保回歸真實世界實力比
 TEAM_ADVANCED_STATS = {
-    "Argentina": [1.85, 0.75], "Brazil": [1.80, 0.80], "France": [1.80, 0.78], "England": [1.75, 0.82], 
-    "Spain": [1.75, 0.80], "Germany": [1.65, 0.88], "Netherlands": [1.60, 0.85], "Portugal": [1.60, 0.86],
-    "Uruguay": [1.50, 0.88], "Colombia": [1.45, 0.90], "Belgium": [1.45, 0.92], "Croatia": [1.40, 0.90],
-    "Japan": [1.35, 0.92], "Morocco": [1.25, 0.82], "Switzerland": [1.30, 0.92], "USA": [1.25, 0.95], 
-    "Mexico": [1.25, 0.98], "Ecuador": [1.20, 0.90], "South Korea": [1.20, 1.02], "Austria": [1.20, 1.00], 
-    "Sweden": [1.20, 1.02], "Türkiye": [1.15, 1.05], "Senegal": [1.15, 1.00], "Norway": [1.25, 1.12], 
-    "Canada": [1.15, 1.08], "Australia": [1.10, 1.05], "Iran": [1.05, 0.95], "Czechia": [1.10, 1.08], 
-    "Egypt": [1.10, 1.04], "Algeria": [1.05, 1.08], "Tunisia": [0.95, 0.98], "Paraguay": [0.90, 0.95], 
-    "Bosnia and Herzegovina": [1.00, 1.12], "Scotland": [0.95, 1.05], "Ghana": [1.00, 1.15], 
-    "Ivory Coast": [1.00, 1.12], "Saudi Arabia": [0.95, 1.10], "Qatar": [0.95, 1.18], "Uzbekistan": [0.90, 1.10], 
-    "Panama": [0.90, 1.15], "South Africa": [0.90, 1.14], "Iraq": [0.85, 1.12], "Cabo Verde": [0.85, 1.15], 
-    "Jordan": [0.80, 1.18], "Congo DR": [0.80, 1.20], "New Zealand": [0.75, 1.22], "Haiti": [0.70, 1.25], 
-    "Curaçao": [0.65, 1.30]
+    "Argentina": [2.20, 0.65], "Brazil": [2.10, 0.70], "France": [2.15, 0.68], "England": [2.05, 0.70], 
+    "Spain": [2.05, 0.70], "Germany": [2.10, 0.75], "Netherlands": [1.85, 0.78], "Portugal": [1.90, 0.75],
+    "Belgium": [1.75, 0.85], "Uruguay": [1.70, 0.80], "Croatia": [1.60, 0.85], "Colombia": [1.65, 0.85],
+    "Morocco": [1.45, 0.85], "Japan": [1.50, 0.90], "USA": [1.45, 0.95], "Mexico": [1.35, 1.00],
+    "Canada": [1.35, 1.05], "Switzerland": [1.35, 0.95], "Austria": [1.35, 0.95], "Sweden": [1.30, 1.00],
+    "Norway": [1.45, 1.10], "Czechia": [1.25, 1.05], "Türkiye": [1.30, 1.10], "Scotland": [1.15, 1.05],
+    "Bosnia and Herzegovina": [1.10, 1.15], "South Korea": [1.35, 1.10], "Iran": [1.15, 1.05],
+    "Australia": [1.15, 1.10], "Saudi Arabia": [1.10, 1.15], "Qatar": [1.05, 1.25], "Iraq": [1.00, 1.20],
+    "Uzbekistan": [1.00, 1.20], "Jordan": [0.95, 1.25], "Senegal": [1.35, 1.00], "Egypt": [1.20, 1.05],
+    "Ivory Coast": [1.30, 1.05], "Algeria": [1.15, 1.10], "Ghana": [1.15, 1.15], "Tunisia": [1.05, 1.10],
+    "South Africa": [1.05, 1.15], "Congo DR": [1.00, 1.25], "Cabo Verde": [0.80, 1.50], "Ecuador": [1.25, 1.00],
+    "Paraguay": [1.05, 1.00], "Panama": [1.00, 1.25], "Haiti": [0.75, 1.70], "Curaçao": [0.70, 1.80],
+    "New Zealand": [0.90, 1.30]
 }
 
 # ==========================================
-# 2. 核心大數據演算法：卜瓦松 + 蒙地卡羅動態模擬
+# 2. Dixon-Coles 補正演算法 與 崩盤因子
 # ==========================================
-def run_monte_carlo_simulation(lambda_a, lambda_b, num_simulations=10000, max_goals=6):
-    sim_matrix = np.zeros((max_goals + 1, max_goals + 1))
-    for _ in range(num_simulations):
-        goals_a = 0
-        goals_b = 0
-        for period in range(3):
-            current_lambda_a = lambda_a / 3.0
-            current_lambda_b = lambda_b / 3.0
-            if goals_a > goals_b:
-                current_lambda_b *= 1.12
-                current_lambda_a *= 0.95
-            elif goals_b > goals_a:
-                current_lambda_a *= 1.12
-                current_lambda_b *= 0.95
-            goals_a += np.random.poisson(current_lambda_a)
-            goals_b += np.random.poisson(current_lambda_b)
-        goals_a = min(goals_a, max_goals)
-        goals_b = min(goals_b, max_goals)
-        sim_matrix[goals_a, goals_b] += 1
-    sim_matrix /= num_simulations
-    return sim_matrix
+def dixon_coles_rho(x, y, lambda_a, lambda_b, rho=-0.15):
+    """修正足球比賽中 0-0, 1-0, 0-1, 1-1 等低比分相互牽制的機率偏差"""
+    if x == 0 and y == 0:
+        return 1 - (lambda_a * lambda_b * rho)
+    elif x == 1 and y == 0:
+        return 1 + (lambda_b * rho)
+    elif x == 0 and y == 1:
+        return 1 + (lambda_a * rho)
+    elif x == 1 and y == 1:
+        return 1 - rho
+    return 1.0
 
-def calculate_match_probabilities(team_a_ch, team_b_ch, max_goals=6):
-    eng_a = TEAM_CH_TO_ENG[team_a_ch]
-    eng_b = TEAM_CH_TO_ENG[team_b_ch]
+def predict_match_prob(team_a_eng, team_b_eng, max_goals=10):
+    """計算對戰機率矩陣，已擴大至 10x10 矩陣以完美捕捉極端大比分"""
+    stats_a = TEAM_ADVANCED_STATS.get(team_a_eng, [1.0, 1.0])
+    stats_b = TEAM_ADVANCED_STATS.get(team_b_eng, [1.0, 1.0])
     
-    # 複製參數，避免原地修改全局字典
-    stats_a = list(TEAM_ADVANCED_STATS.get(eng_a, [1.0, 1.0]))
-    stats_b = list(TEAM_ADVANCED_STATS.get(eng_b, [1.0, 1.0]))
+    # 2026 美加墨東道主主場優勢加成 (進攻戰力加權 10%)
+    home_adv_a = 1.10 if team_a_eng in ["USA", "Mexico", "Canada"] else 1.00
+    home_adv_b = 1.10 if team_b_eng in ["USA", "Mexico", "Canada"] else 1.00
     
-    # -------------------------------------------------------------
-    # 🌟 大賽動態環境調節器 (修正名氣虛高、強化戰術保守度與主場)
-    # -------------------------------------------------------------
-    # 1. 主場/地緣優勢校正 (主隊進攻增加，防守失球率下降)
-    stats_a[0] *= 1.08  # 主隊進攻 +8%
-    stats_a[1] *= 0.95  # 主隊防守變好 -5%失球
+    # 基礎期望值計算 (A進攻*B防守)
+    lambda_a = GLOBAL_AVG_GOALS * stats_a[0] * stats_b[1] * home_adv_a
+    lambda_b = GLOBAL_AVG_GOALS * stats_b[0] * stats_a[1] * home_adv_b
     
-    # 2. 強隊開局冷卻抑制 (調低傳統豪門小組賽初期的進攻爆發，模擬保守踢法)
-    if stats_a[0] > 1.5: stats_a[0] *= 0.86
-    if stats_b[0] > 1.5: stats_b[0] *= 0.86
-    
-    # 3. 弱隊死守剛性補償 (強弱懸殊時，自動調強弱隊防守，模擬鐵桶陣)
-    if (stats_a[0] - stats_b[0]) > 0.4:
-        stats_b[1] *= 0.88  # 客隊防守失球率下降 12%
-    elif (stats_b[0] - stats_a[0]) > 0.4:
-        stats_a[1] *= 0.88  # 主隊防守失球率下降 12%
-    # -------------------------------------------------------------
-    
-    # 計算主客隊個別的進球期望值純量
-    lambda_a = GLOBAL_AVG_GOALS * stats_a[0] * stats_b[1]
-    lambda_b = GLOBAL_AVG_GOALS * stats_b[0] * stats_a[1]
-    
-    # 大賽整體趨於謹慎，期望值全面微幅壓縮
-    lambda_a *= 0.94
-    lambda_b *= 0.94
-    
-    dynamic_matrix = run_monte_carlo_simulation(lambda_a, lambda_b, num_simulations=10000, max_goals=max_goals)
-    
-    # 嚴謹計算勝、平、負率
-    win_p, draw_p, loss_p = 0.0, 0.0, 0.0
-    for i in range(max_goals + 1):
-        for j in range(max_goals + 1):
-            if i > j:
-                win_p += dynamic_matrix[i, j]
-            elif i == j:
-                draw_p += dynamic_matrix[i, j]
-            else:
-                loss_p += dynamic_matrix[i, j]
-    
-    total_goals_dist = {}
-    for i in range(max_goals + 1):
-        for j in range(max_goals + 1):
-            g = i + j
-            total_goals_dist[g] = total_goals_dist.get(g, 0) + dynamic_matrix[i, j]
+    # 【核心強弱崩盤修正】：當實力懸殊過大時，觸發弱隊防線崩潰邏輯
+    if stats_a[0] / stats_b[0] > 1.5:
+        lambda_a *= 1.45  # 強隊火力全面釋放
+        lambda_b *= 0.60  # 弱隊進攻受強隊防線完全封鎖
+    elif stats_b[0] / stats_a[0] > 1.5:
+        lambda_b *= 1.45
+        lambda_a *= 0.60
+        
+    prob_matrix = np.zeros((max_goals, max_goals))
+    for i in range(max_goals):
+        for j in range(max_goals):
+            p_a = stats.poisson.pmf(i, lambda_a)
+            p_b = stats.poisson.pmf(j, lambda_b)
+            dc_adjustment = dixon_coles_rho(i, j, lambda_a, lambda_b)
+            prob_matrix[i, j] = p_a * p_b * dc_adjustment
             
-    p_under_1_5 = total_goals_dist.get(0, 0) + total_goals_dist.get(1, 0)
-    p_over_1_5 = 1.0 - p_under_1_5
-    p_under_2_5 = p_under_1_5 + total_goals_dist.get(2, 0)
-    p_over_2_5 = 1.0 - p_under_2_5
+    prob_matrix = np.clip(prob_matrix, 0, None)
+    prob_matrix /= prob_matrix.sum()
     
-    # 計算雙方進球 (BTTS)
-    zero_lines_prob = np.sum(dynamic_matrix[0, :]) + np.sum(dynamic_matrix[:, 0]) - dynamic_matrix[0, 0]
-    p_btts = max(0.0, 1.0 - zero_lines_prob)
+    win_prob = np.sum(np.tril(prob_matrix, -1))
+    draw_prob = np.sum(np.diag(prob_matrix))
+    loss_prob = np.sum(np.triu(prob_matrix, 1))
     
-    prob_zero_a = stats.poisson.pmf(0, lambda_a)
-    prob_zero_b = stats.poisson.pmf(0, lambda_b)
-    score_a = int(round(lambda_a))
-    score_b = int(round(lambda_b))
-    
-    if prob_zero_a > 0.45: score_a = 0
-    if prob_zero_b > 0.45: score_b = 0
-    best_score = (score_a, score_b)
-    
-    correct_scores = []
-    for i in range(max_goals + 1):
-        for j in range(max_goals + 1):
-            correct_scores.append(((i, j), dynamic_matrix[i, j]))
-    correct_scores.sort(key=lambda x: x[1], reverse=True)
-    
-    return {
-        "lambda_a": lambda_a, "lambda_b": lambda_b,
-        "win_p": win_p, "draw_p": draw_p, "loss_p": loss_p,
-        "p_over_1_5": p_over_1_5, "p_over_2_5": p_over_2_5, "p_btts": p_btts,
-        "xg_score": best_score, "top_scores": correct_scores[:5], "matrix": dynamic_matrix
-    }
+    return lambda_a, lambda_b, prob_matrix, win_prob, draw_prob, loss_prob
+
+def simulate_match_score(lambda_a, lambda_b):
+    """蒙特卡羅模擬單場比分"""
+    score_a = np.random.poisson(lambda_a)
+    score_b = np.random.poisson(lambda_b)
+    return score_a, score_b
 
 # ==========================================
-# 3. Streamlit 網頁 UI 渲染
+# 3. Streamlit 介面與功能實作 (嚴格對齊原版排版)
 # ==========================================
-st.markdown("### 🏆 PrediGoal Pro+ Ultra - 2026 世界盃 AI 終極預測系統")
+st.title("🏆 PrediGoal Pro+ Ultra")
+st.subheader("2026 世界盃 AI 終極預測系統")
 
-mode = st.sidebar.radio("🔮 請選擇功能模組", ["單場精準大數據預測", "小組對戰交叉模擬"])
+mode = st.sidebar.radio("🔮 選擇預測模式", ["單場對戰預測", "完整分組賽模擬", "戰力數據總覽"])
 
-if mode == "單場精準大數據預測":
-    st.header("🎯 國家隊強強對決預測")
+# 模式 1：單場對戰預測
+if mode == "單場對戰預測":
+    st.header("⚽ 國家隊強強對決預測")
     col1, col2 = st.columns(2)
     with col1:
-        team_a = st.selectbox("請選擇 主隊 (Home)", ALL_CH_TEAMS, index=ALL_CH_TEAMS.index("土耳其"))
+        team_a_ch = st.selectbox("請選擇主隊 (Home Team):", ALL_CH_TEAMS, index=ALL_CH_TEAMS.index("西班牙"))
     with col2:
-        team_b = st.selectbox("請选择 客隊 (Away)", ALL_CH_TEAMS, index=ALL_CH_TEAMS.index("澳洲"))
+        team_b_ch = st.selectbox("請選擇客隊 (Away Team):", ALL_CH_TEAMS, index=ALL_CH_TEAMS.index("維德角"))
         
-    if team_a != team_b:
-        res = calculate_match_probabilities(team_a, team_b)
+    if team_a_ch == team_b_ch:
+        st.error("請選擇不同的球隊進行對戰！")
+    else:
+        team_a_eng = TEAM_CH_TO_ENG[team_a_ch]
+        team_b_eng = TEAM_CH_TO_ENG[team_b_ch]
         
-        # 勝平負大盤
-        st.subheader("📊 獨贏盤 (勝平負) 概率預測 (動態模擬優化)")
-        m_col1, m_col2, m_col3 = st.columns(3)
-        m_col1.metric(f"🟢 {team_a} 獨贏勝率", f"{res['win_p']*100:.2f}%", f"AI預期進球(xG): {res['lambda_a']:.2f}")
-        m_col2.metric("🟡 常規時間平局率", f"{res['draw_p']*100:.2f}%")
-        m_col3.metric(f"🔵 {team_b} 獨贏勝率", f"{res['loss_p']*100:.2f}%", f"AI預期進球(xG): {res['lambda_b']:.2f}")
+        # 顯示當前選中隊伍的底層戰力參數 (讓使用者頁面能直觀核對)
+        stats_a_view = TEAM_ADVANCED_STATS[team_a_eng]
+        stats_b_view = TEAM_ADVANCED_STATS[team_b_eng]
         
-        # 指標對照
-        st.write("---")
-        st.subheader("💡 核心科學指標對照")
-        x_col1, x_col2 = st.columns(2)
-        with x_col1:
-            st.info(f"🤖 **AI 綜合情形期望值比分 (xG Score)： {res['xg_score'][0]} - {res['xg_score'][1]}**")
-        with x_col2:
-            top_score_tuple = res['top_scores'][0][0]
-            top_score_prob = res['top_scores'][0][1]
-            st.success(f"🎲 **單一最高機率比分 (Mode Score)： {top_score_tuple[0]} - {top_score_tuple[1]} ({top_score_prob*100:.1f}%)**")
-
-        # 🎯 大小球與 BTTS 智能指標
-        st.write("---")
-        st.subheader("🎯 大小球與 BTTS 智能指標")
-        rec_col1, rec_col2, rec_col3 = st.columns(3)
+        param_c1, param_c2 = st.columns(2)
+        with param_c1:
+            st.markdown(f"**⚔️ {team_a_ch} 核心特徵**")
+            st.caption(f"進攻指數: `{stats_a_view[0]:.2f}` | 防守脆弱度: `{stats_a_view[1]:.2f}`")
+        with param_c2:
+            st.markdown(f"**⚔️ {team_b_ch} 核心特徵**")
+            st.caption(f"進攻指數: `{stats_b_view[0]:.2f}` | 防守脆弱度: `{stats_b_view[1]:.2f}`")
+            
+        la, lb, matrix, p_win, p_draw, p_loss = predict_match_prob(team_a_eng, team_b_eng)
         
-        with rec_col1:
-            st.markdown("**【全場 1.5 球盤口】**")
-            st.write(f"📈 大 1.5 機率: {res['p_over_1_5']*100:.1f}%")
-            st.write(f"📉 小 1.5 機率: {(1.0 - res['p_over_1_5'])*100:.1f}%")
-            if res['p_over_1_5'] > 0.65:
-                st.caption("💡 建議：高機率有 2 球以上，適合大球配置")
-            else:
-                st.caption("💡 建議：交火可能較為沉悶")
+        st.write("### 📊 綜合勝率預測")
+        c1, c2, c3 = st.columns(3)
+        c1.metric(f"📈 {team_a_ch} 勝率", f"{p_win:.1%}")
+        c2.metric("🤝 和局機率", f"{p_draw:.1%}")
+        c3.metric(f"📉 {team_b_ch} 勝率", f"{p_loss:.1%}")
+        
+        # ==========================================
+        # 投注必備：4 大核心指標呈現
+        # ==========================================
+        st.write("### 🎯 AI 核心投注預測指標")
+        
+        # 1. 精確比分計算 (支援 10x10 全域檢索)
+        scores_list = []
+        rows, cols_num = matrix.shape
+        for i in range(rows): 
+            for j in range(cols_num):
+                scores_list.append((f"{i} - {j}", matrix[i, j]))
+        scores_list.sort(key=lambda x: x[1], reverse=True) # 強制使用機率值(索引1)進行降序排序
+        
+        # 2. 大小分與雙方進球加總
+        prob_over_15 = 0.0
+        prob_over_25 = 0.0
+        prob_btts_yes = 0.0
+        
+        for i in range(rows):
+            for j in range(cols_num):
+                total_goals = i + j
+                prob = matrix[i, j]
+                if total_goals > 1.5: prob_over_15 += prob
+                if total_goals > 2.5: prob_over_25 += prob
+                if i > 0 and j > 0: prob_btts_yes += prob
                 
-        with rec_col2:
-            st.markdown("**【全場 2.5 球盤口】**")
-            st.write(f"📈 大 2.5 機率: {res['p_over_2_5']*100:.1f}%")
-            st.write(f"📉 小 2.5 機率: {(1.0 - res['p_over_2_5'])*100:.1f}%")
-            if res['p_over_2_5'] > 0.55:
-                st.caption("💡 建議：兩隊球風開放，推薦大球")
-            else:
-                st.caption("💡 建議：防守嚴密，傾向小球")
+        prob_under_15 = 1.0 - prob_over_15
+        prob_under_25 = 1.0 - prob_over_25
+        prob_btts_no = 1.0 - prob_btts_yes
 
-        with rec_col3:
-            st.markdown("**【雙方進球 BTTS】**")
-            st.write(f"🤝 雙方皆進球機率: {res['p_btts']*100:.1f}%")
-            st.write(f"🚫 至少一隊零封機率: {(1.0 - res['p_btts'])*100:.1f}%")
-            if res['p_btts'] > 0.50:
-                st.caption("💡 建議：兩隊皆有破門能力")
+        data_col1, data_col2, data_col3 = st.columns(3)
+        
+        with data_col1:
+            st.markdown("#### 🔢 預測正確比分 (Top 5)")
+            for r in range(5):
+                score_str, prob_val = scores_list[r]
+                st.write(f"第 {r+1} 順位： **{score_str}** (機率: {prob_val:.1%})")
+                
+        with data_col2:
+            st.markdown("#### 📈 進球大小分盤口")
+            st.write(f"**1.5 大球**: {prob_over_15:.1%} | **1.5 小球**: {prob_under_15:.1%}")
+            st.write(f"**2.5 大球**: {prob_over_25:.1%} | **2.5 小球**: {prob_under_25:.1%}")
+            
+        with data_col3:
+            st.markdown("#### 🤝 雙方是否都進球 (BTTS)")
+            st.write(f"**是 (兩隊皆得分)**: {prob_btts_yes:.1%}")
+            st.write(f"**否 (單方或零得分)**: {prob_btts_no:.1%}")
+            
+        # 歷史圖表保留
+        st.write("### 🗺️ 熱門比分分佈圖 (局部核心 5x5 檢視)")
+        fig, ax = plt.subplots(figsize=(6, 4))
+        sns.heatmap(matrix[:5, :5], annot=True, fmt=".1%", cmap="YlOrRd", 
+                    xticklabels=range(5), yticklabels=range(5), ax=ax)
+        ax.set_xlabel(f"{team_b_ch} 進球數")
+        ax.set_ylabel(f"{team_a_ch} 進球數")
+        st.pyplot(fig)
+
+# 模式 2：完整分組賽模擬
+elif mode == "完整分組賽模擬":
+    st.header("🎲 2026 世界盃分組賽 AI 蒙特卡羅模擬")
+    sim_runs = st.slider("模擬次數 (次數越多越精準)", 100, 5000, 1000, step=100)
+    
+    if st.button("🚀 開始執行全量模擬"):
+        progress_bar = st.progress(0)
+        group_standings = {g: {t: {"points": 0, "gf": 0, "ga": 0} for t in teams.values()} for g, teams in WORLD_CUP_48_TEAMS.items()}
+        
+        for idx, (grp, teams) in enumerate(WORLD_CUP_48_TEAMS.items()):
+            team_list = list(teams.values())
+            for i in range(len(team_list)):
+                for j in range(i + 1, len(team_list)):
+                    ta, tb = team_list[i], team_list[j]
+                    ta_eng, tb_eng = TEAM_CH_TO_ENG[ta], TEAM_CH_TO_ENG[tb]
