@@ -219,7 +219,157 @@ if mode == "單場對戰預測":
         ax.set_ylabel(f"{team_a_ch} 進球數")
         st.pyplot(fig)
 
+# 模式 2：完整分組賽模擬
 elif mode == "完整分組賽模擬":
     st.header("🎲 2026 世界盃分組賽 AI 蒙特卡羅模擬")
-    sim_runs = st.slider("模擬次數", 100, 5000, 1000, step=100)
+    sim_runs = st.slider("選擇蒙特卡羅模擬次數", 100, 2000, 1000, step=100, help="次數越多越精準，計算時間也會較長")
+    
+    if st.button("🚀 開始執行全量盃賽模擬"):
+        # 初始化統計字典，用來記錄每隊在數千次模擬中晉級十六強的總次數
+        advance_counts = {t: 0 for teams in WORLD_CUP_48_TEAMS.values() for t in teams.values()}
+        
+        # 建立讀取動畫提示
+        with st.spinner("AI 正在動態模擬數萬場對戰中，請稍候..."):
+            for sim in range(sim_runs):
+                # 每次獨立模擬都需要一個乾淨的積分榜
+                sim_standings = {g: {t: {"points": 0, "gf": 0, "ga": 0} for t in teams.values()} for g, teams in WORLD_CUP_48_TEAMS.items()}
+                
+                # 遍歷 A 到 L 共 12 個小組
+                for grp, teams in WORLD_CUP_48_TEAMS.items():
+                    team_list = list(teams.values())
+                    # 每個小組內進行 6 場循環賽 (每隊打 3 場)
+                    for i in range(len(team_list)):
+                        for j in range(i + 1, len(team_list)):
+                            ta, tb = team_list[i], team_list[j]
+                            ta_eng, tb_eng = TEAM_CH_TO_ENG[ta], TEAM_CH_TO_ENG[tb]
+                            
+                            # 1. 抓取最原始戰力係數
+                            stats_a = TEAM_ADVANCED_STATS.get(ta_eng, [1.0, 1.0])
+                            stats_b = TEAM_ADVANCED_STATS.get(tb_eng, [1.0, 1.0])
+                            
+                            att_a, def_a = float(stats_a[0]), float(stats_a[1])
+                            att_b, def_b = float(stats_b[0]), float(stats_b[1])
+                            
+                            # 2. 僅東道主享有 10% 主場加成
+                            home_adv_a = 1.10 if ta_eng in ["USA", "Mexico", "Canada"] else 1.00
+                            home_adv_b = 1.10 if tb_eng in ["USA", "Mexico", "Canada"] else 1.00
+                            
+                            # 3. 交叉計算 λ
+                            la = GLOBAL_AVG_GOALS * att_a * def_b * home_adv_a
+                            lb = GLOBAL_AVG_GOALS * att_b * def_a * home_adv_b
+                            
+                            # 4. 完美套用單場修正：1.5倍戰意加成
+                            if att_a / att_b > 1.5:
+                                la *= 1.15
+                                lb *= 0.88
+                            elif att_b / att_a > 1.5:
+                                lb *= 1.15
+                                la *= 0.88
+                                
+                            # 5. 完美套用單場修正：神鋒暴走機制
+                            if att_a > 1.40 and def_b > 1.10:
+                                la *= 1.25
+                                lb *= 0.85
+                            elif att_b > 1.40 and def_a > 1.10:
+                                lb *= 1.25
+                                la *= 0.85
+                                
+                            # 6. 通過卜瓦松隨機抽樣模擬單場真實比分
+                            score_a = np.random.poisson(la)
+                            score_b = np.random.poisson(lb)
+                            
+                            # 7. 積分榜數據累加
+                            sim_standings[grp][ta]["gf"] += score_a
+                            sim_standings[grp][ta]["ga"] += score_b
+                            sim_standings[grp][tb]["gf"] += score_b
+                            sim_standings[grp][tb]["ga"] += score_a
+                            
+                            if score_a > score_b:
+                                sim_standings[grp][ta]["points"] += 3
+                            elif score_b > score_a:
+                                sim_standings[grp][tb]["points"] += 3
+                            else:
+                                sim_standings[grp][ta]["points"] += 1
+                                sim_standings[grp][tb]["points"] += 1
+                
+                # 每輪全量模擬結束後，判定每組的前兩名 (2026新賽制小組前2直接晉級)
+                for grp, teams_data in sim_standings.items():
+                    # 排序規則：積分 > 淨勝球 > 總進球數
+                    sorted_teams = sorted(
+                        teams_data.items(),
+                        key=lambda x: (x[1]["points"], x[1]["gf"] - x[1]["ga"], x[1]["gf"]),
+                        reverse=True
+                    )
+                    # 記錄小組第一與小組第二的晉級次數
+                    advance_counts[sorted_teams[0][0]] += 1
+                    advance_counts[sorted_teams[1][0]] += 1
+        
+        st.success(f"🎉 已成功執行完畢 {sim_runs} 次分組賽完整演練！")
+        
+        # 格式化輸出結果
+        st.write("### 📊 AI 預測各小組十六強晉級機率榜")
+        display_cols = st.columns(3)
+        
+        # 將 12 個小組均勻分配到 3 個垂直欄位進行優雅展現
+        for idx, (grp, teams) in enumerate(WORLD_CUP_48_TEAMS.items()):
+            col_target = display_cols[idx % 3]
+            with col_target:
+                st.markdown(f"#### 🏆 {grp}")
+                grp_res = []
+                for t in teams.values():
+                    prob = advance_counts[t] / sim_runs
+                    grp_res.append({"球隊": t, "十六強晉級率": f"{prob:.1%}", "_raw": prob})
+                
+                df_grp = pd.DataFrame(grp_res).sort_values(by="_raw", ascending=False).drop(columns=["_raw"])
+                st.dataframe(df_grp, use_container_width=True, hide_index=True)
+
+# 模式 3：戰力數據總覽
+elif mode == "戰力數據總覽":
+    st.header("📊 2026 世界盃參賽球隊 AI 戰力指數總覽")
+    st.write("底層雙維度特徵矩陣：進攻指數越高代表進攻火力越猛；防守脆弱度越低代表防線越穩固。")
+    
+    # 重新整理 DataFrame 排行榜
+    leaderboard = []
+    for grp, teams in WORLD_CUP_48_TEAMS.items():
+        for eng, ch in teams.items():
+            stats_vals = TEAM_ADVANCED_STATS.get(eng, [1.0, 1.0])
+            leaderboard.append({
+                "所屬小組": grp,
+                "球隊中文名": ch,
+                "球隊英文名": eng,
+                "🚀 AI 進攻特徵指數": round(float(stats_vals[0]), 2),
+                "🛡️ AI 防守脆弱度": round(float(stats_vals[1]), 2),
+                "綜合戰力分級": "👑 超級豪門" if stats_vals[0] > 2.0 else ("⚔️ 一線強權" if stats_vals[0] > 1.5 else "🏐 中游韌性")
+            })
+            
+    df_all = pd.DataFrame(leaderboard).sort_values(by="🚀 AI 進攻特徵指數", ascending=False)
+    
+    # 介面搜尋與篩選器
+    search_q = st.text_input("🔍 輸入球隊名稱快速檢索戰力：", "")
+    if search_q:
+        df_all = df_all[df_all["球隊中文名"].str.contains(search_q) | df_all["球隊英文名"].str.contains(search_q, case=False)]
+        
+    st.dataframe(df_all, use_container_width=True, hide_index=True, height=500)
+    
+    # 戰力特徵分佈圖可視化
+    st.write("### 📈 48 強戰力雙維度分佈象限")
+    fig_all, ax_all = plt.subplots(figsize=(10, 5))
+    # 這裡過濾主要豪門與有特色球隊進行打點展示，避免 48 顆點字體重疊
+    show_labels = ["Argentina", "France", "Brazil", "Spain", "Norway", "Iraq", "Algeria", "Jordan", "Mexico", "USA"]
+    
+    x_vals = [t["🚀 AI 進攻特徵指數"] for t in leaderboard]
+    y_vals = [t["🛡️ AI 防守脆弱度"] for t in leaderboard]
+    names = [t["球隊中文名"] for t in leaderboard]
+    eng_names = [t["球隊英文名"] for t in leaderboard]
+    
+    ax_all.scatter(x_vals, y_vals, color="crimson", alpha=0.6, edgecolors="white", s=80)
+    for i, txt in enumerate(names):
+        if eng_names[i] in show_labels:
+            ax_all.annotate(txt, (x_vals[i]+0.02, y_vals[i]), fontsize=9, fontproperties="Microsoft JhengHei")
+            
+    ax_all.set_xlabel("🚀 進攻特徵指數 (越高越強)")
+    ax_all.set_ylabel("🛡️ 防守脆弱度 (越低越穩)")
+    ax_all.invert_yaxis()  # 反轉Y軸，讓防守好的(數值小)排在上方
+    ax_all.grid(True, linestyle="--", alpha=0.5)
+    st.pyplot(fig_all)
 
