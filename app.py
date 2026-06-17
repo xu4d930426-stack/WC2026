@@ -136,13 +136,16 @@ st.subheader("2026 世界盃 AI 終極預測系統")
 
 mode = st.sidebar.radio("選擇預測模式", ["單場對戰預測", "完整分組賽模擬", "戰力數據總覽"])
 
+# 模式 1：單場對戰預測
 if mode == "單場對戰預測":
     st.header("⚽ 國家隊強強對決預測")
+    
+    # 🎯 投注優化：調整為客隊在左、主隊在右的直觀順序
     col1, col2 = st.columns(2)
     with col1:
-        team_a_ch = st.selectbox("請選擇主隊 (Home Team):", ALL_CH_TEAMS, index=ALL_CH_TEAMS.index("法國"))
+        team_b_ch = st.selectbox("請選擇客隊 (Away Team):", ALL_CH_TEAMS, index=ALL_CH_TEAMS.index("維德角"))
     with col2:
-        team_b_ch = st.selectbox("請選擇客隊 (Away Team):", ALL_CH_TEAMS, index=ALL_CH_TEAMS.index("塞內加爾"))
+        team_a_ch = st.selectbox("請選擇主隊 (Home Team):", ALL_CH_TEAMS, index=ALL_CH_TEAMS.index("西班牙"))
         
     if team_a_ch == team_b_ch:
         st.error("請選擇不同的球隊進行對戰！")
@@ -153,21 +156,23 @@ if mode == "單場對戰預測":
         stats_a_view = TEAM_ADVANCED_STATS[team_a_eng]
         stats_b_view = TEAM_ADVANCED_STATS[team_b_eng]
         
+        # 🎯 戰力特徵卡片同步對調
         param_c1, param_c2 = st.columns(2)
         with param_c1:
-            st.markdown(f"**📊 {team_a_ch} 核心特徵**")
-            st.caption(f"進攻指數: `{stats_a_view[0]:.2f}` | 防守脆弱度: `{stats_a_view[1]:.2f}`")
-        with param_c2:
-            st.markdown(f"**📊 {team_b_ch} 核心特徵**")
+            st.markdown(f"**📊 {team_b_ch} (客隊) 核心特徵**")
             st.caption(f"進攻指數: `{stats_b_view[0]:.2f}` | 防守脆弱度: `{stats_b_view[1]:.2f}`")
+        with param_c2:
+            st.markdown(f"**📊 {team_a_ch} (主隊) 核心特徵**")
+            st.caption(f"進攻指數: `{stats_a_view[0]:.2f}` | 防守脆弱度: `{stats_a_view[1]:.2f}`")
             
         la, lb, matrix, p_win, p_draw, p_loss = predict_match_prob(team_a_eng, team_b_eng)
         
         st.write("### 綜合勝率預測")
         c1, c2, c3 = st.columns(3)
-        c1.metric(f"🔥 {team_a_ch} 勝率", f"{p_win:.1%}")
+        # 🎯 勝率看板同步調整為：客勝 | 和局 | 主勝
+        c1.metric(f"⚡ {team_b_ch} (客勝) 機率", f"{p_loss:.1%}")
         c2.metric("🤝 和局機率", f"{p_draw:.1%}")
-        c3.metric(f"⚡ {team_b_ch} 勝率", f"{p_loss:.1%}")
+        c3.metric(f"🔥 {team_a_ch} (主勝) 機率", f"{p_win:.1%}")
         
         st.write("### AI 核心投注預測指標")
         
@@ -175,8 +180,8 @@ if mode == "單場對戰預測":
         rows, cols_num = matrix.shape
         for i in range(rows): 
             for j in range(cols_num):
-                # 完美格式化為：主隊(i) 進球數 - 客隊(j) 進球數
-                scores_list.append((f"{i} - {j}", matrix[i, j]))
+                # 🎯 投注優化：精確調整比分格式為「客隊進球數 - 主隊進球數」，完美對齊手抄筆記
+                scores_list.append((f"{j} - {i}", matrix[i, j]))
         scores_list.sort(key=lambda x: x[1], reverse=True)
         
         prob_over_15 = 0.0
@@ -214,10 +219,12 @@ if mode == "單場對戰預測":
             
         st.write("### 熱門比分分佈圖 (局部核心 5x5 檢視)")
         fig, ax = plt.subplots(figsize=(6, 4))
+        # 🎯 熱圖的 X 軸與 Y 軸也對調，讓 X 軸在左邊代表客隊進球，Y 軸在右邊代表主隊進球
         sns.heatmap(matrix[:5, :5], annot=True, fmt=".1%", cmap="YlOrRd", xticklabels=range(5), yticklabels=range(5), ax=ax)
-        ax.set_xlabel(f"{team_b_ch} 進球數")
-        ax.set_ylabel(f"{team_a_ch} 進球數")
+        ax.set_xlabel(f"{team_b_ch} (客隊) 進球數")
+        ax.set_ylabel(f"{team_a_ch} (主隊) 進球數")
         st.pyplot(fig)
+
 
 # 模式 2：完整分組賽模擬
 elif mode == "完整分組賽模擬":
@@ -372,4 +379,6 @@ elif mode == "戰力數據總覽":
     ax_all.invert_yaxis()  # 反轉Y軸，讓防守好的(數值小)排在上方
     ax_all.grid(True, linestyle="--", alpha=0.5)
     st.pyplot(fig_all)
+
+
 
