@@ -58,13 +58,16 @@ TEAM_ADVANCED_STATS = {
     "New Zealand": [0.90, 1.30]
 }
 
+# ==========================================
+# 2. Dixon-Coles 補正演算法 與 新賽制擺大巴完全體模型
+# ==========================================
 def dixon_coles_rho(x, y, lambda_a, lambda_b, rho=-0.15):
     """修正足球比賽中 0-0, 1-0, 0-1, 1-1 等低比分相互牽制的機率偏差"""
     if x == 0 and y == 0:
         return 1 - (lambda_a * lambda_b * rho)
     elif x == 1 and y == 0:
         return 1 + (lambda_b * rho)
-    elif x == 0 and y == 1:  # 💡 這裡精確改回 y 變數，Bug 徹底移除！
+    elif x == 0 and y == 1:
         return 1 + (lambda_a * rho)
     elif x == 1 and y == 1:
         return 1 - rho
@@ -72,50 +75,71 @@ def dixon_coles_rho(x, y, lambda_a, lambda_b, rho=-0.15):
 
 def predict_match_prob(team_a_eng, team_b_eng, max_goals=10):
     """
-    【昨日記憶數據 - 終極定稿完全體】
-    精確匹配法國 3-1 (8.0%)、2-1 (7.4%) 與挪威 2-1 (8.9%) 的底層戰意權重
+    【2026世界盃完全體後台】
+    精確提取純浮點數變數，結合美墨加主場限制、神鋒暴走與新賽制擺大巴機制
     """
     stats_a = TEAM_ADVANCED_STATS.get(team_a_eng, [1.0, 1.0])
     stats_b = TEAM_ADVANCED_STATS.get(team_b_eng, [1.0, 1.0])
     
-    # 僅加拿大、美國、墨西哥享有 10% 主場優勢
+    # =======================================================
+    # 🎯 核心修復：精確提取 [0]進攻特徵 與 [1]防守脆弱度
+    # =======================================================
+    att_a = float(stats_a[0])  # 主隊進攻
+    def_a = float(stats_a[1])  # 主隊防守
+    att_b = float(stats_b[0])  # 客隊進攻
+    def_b = float(stats_b[1])  # 客隊防守
+
+    
+    # 2. 東道主限制：僅加拿大、美國、墨西哥被選為主隊時享有 10% 主場優勢
     home_adv_a = 1.10 if team_a_eng in ["USA", "Mexico", "Canada"] else 1.00
     home_adv_b = 1.10 if team_b_eng in ["USA", "Mexico", "Canada"] else 1.00
     
-    # 提取進防純浮點數
-    att_a, def_a = float(stats_a[0]), float(stats_a[1])
-    att_b, def_b = float(stats_b[0]), float(stats_b[1])
-    
-    # 基礎期望值交叉計算
+    # 3. 使用純浮點數變數計算基礎期望值 (主攻 * 客防)
     lambda_a = GLOBAL_AVG_GOALS * att_a * def_b * home_adv_a
     lambda_b = GLOBAL_AVG_GOALS * att_b * def_a * home_adv_b
     
-    # 🎯 核心權重校正：還原符合手抄筆記 8.0% 的盃賽強隊爭分戰意
+    # =======================================================
+    # 🎯 戰意、神鋒與新賽制大巴機制（互斥階梯重構版）
+    # =======================================================
     ratio_a_b = att_a / att_b
     ratio_b_a = att_b / att_a
     
-    # 條件 1：若基礎實力比值達 1.5 懸殊門檻，觸發分組賽淨勝球戰意
-    if ratio_a_b > 1.5:
+    # 【核心修復】：改用 if-elif 互斥結構，一場比賽只會觸發一種極端戰術，絕不重複相乘！
+    if ratio_a_b > 1.6:
+        # 情況 A：實力極端懸殊，弱隊全面退守擺大巴，強隊火力受到戰術嚴重壓縮
+        lambda_a *= 0.85  # 西班牙、葡萄牙場強制在此處攔截，火力急凍！
+        lambda_b *= 0.50
+    elif ratio_b_a > 1.6:
+        lambda_b *= 0.85
+        lambda_a *= 0.50
+        
+    elif ratio_a_b > 1.5:
+        # 情況 B：標準強弱懸殊，觸發常態分組賽淨勝球爭分戰意
         lambda_a *= 1.15
         lambda_b *= 0.88
     elif ratio_b_a > 1.5:
         lambda_b *= 1.15
         lambda_a *= 0.88
         
-    # 條件 2：若任何球隊進攻極強(>1.40) 且 對手防守脆弱(>1.10)，觸發神鋒暴走狂轟
-    if att_a > 1.40 and def_b > 1.10:
-        lambda_a *= 1.25  # 火力上限再度釋放，將比分逼向 3-1, 4-1
+    elif att_a > 1.40 and def_b > 1.10:
+        # 情況 C：實力有差距且遇到防線漏勺，強隊神鋒狂轟暴走
+        lambda_a *= 1.25
         lambda_b *= 0.85
     elif att_b > 1.40 and def_a > 1.10:
         lambda_b *= 1.25
         lambda_a *= 0.85
+
+        
+    # 5. 構建機率矩陣與中立國 Dixon-Coles 智慧切換
+    is_neutral = team_a_eng not in ["USA", "Mexico", "Canada"] and team_b_eng not in ["USA", "Mexico", "Canada"]
+    current_rho = 0.0 if is_neutral else -0.15
         
     prob_matrix = np.zeros((max_goals, max_goals))
     for i in range(max_goals):
         for j in range(max_goals):
             p_a = stats.poisson.pmf(i, lambda_a)
             p_b = stats.poisson.pmf(j, lambda_b)
-            dc_adjustment = dixon_coles_rho(i, j, lambda_a, lambda_b)
+            dc_adjustment = dixon_coles_rho(i, j, lambda_a, lambda_b, rho=current_rho)
             prob_matrix[i, j] = p_a * p_b * dc_adjustment
             
     prob_matrix = np.clip(prob_matrix, 0, None)
@@ -127,17 +151,14 @@ def predict_match_prob(team_a_eng, team_b_eng, max_goals=10):
     
     return lambda_a, lambda_b, prob_matrix, win_prob, draw_prob, loss_prob
 
-
-# ==========================================
-# 3. Streamlit 介面與功能實作
-# ==========================================
-st.title("🏆 PrediGoal Pro+ Ultra")
-st.subheader("2026 世界盃 AI 終極預測系統")
+def simulate_match_score(lambda_a, lambda_b):
+    return np.random.poisson(lambda_a), np.random.poisson(lambda_b)
 
 mode = st.sidebar.radio("選擇預測模式", ["單場對戰預測", "完整分組賽模擬", "戰力數據總覽"])
 
 # 模式 1：單場對戰預測
 if mode == "單場對戰預測":
+    
     st.header("⚽ 國家隊強強對決預測")
     
     # 🎯 投注優化：調整為客隊在左、主隊在右的直觀順序
@@ -229,61 +250,73 @@ if mode == "單場對戰預測":
 # 模式 2：完整分組賽模擬
 elif mode == "完整分組賽模擬":
     st.header("🎲 2026 世界盃分組賽 AI 蒙特卡羅模擬")
-    sim_runs = st.slider("選擇蒙特卡羅模擬次數", 100, 2000, 1000, step=100, help="次數越多越精準，計算時間也會較長")
+    sim_runs = st.slider("選擇蒙特卡羅模擬次數", 100, 2000, 1000, step=100, help="次數越多越精準")
     
     if st.button("🚀 開始執行全量盃賽模擬"):
-        # 初始化統計字典，用來記錄每隊在數千次模擬中晉級十六強的總次數
+        # 初始化統計字典，記錄每隊在數千次模擬中晉級十六強的總次數
         advance_counts = {t: 0 for teams in WORLD_CUP_48_TEAMS.values() for t in teams.values()}
         
-        # 建立讀取動畫提示
-        with st.spinner("AI 正在動態模擬數萬場對戰中，請稍候..."):
+        with st.spinner("AI 正在使用最新神鋒戰意與擺大巴模型模擬數萬場對戰中..."):
             for sim in range(sim_runs):
-                # 每次獨立模擬都需要一個乾淨的積分榜
+                # 每次模擬獨立初始化積分榜
                 sim_standings = {g: {t: {"points": 0, "gf": 0, "ga": 0} for t in teams.values()} for g, teams in WORLD_CUP_48_TEAMS.items()}
                 
-                # 遍歷 A 到 L 共 12 個小組
                 for grp, teams in WORLD_CUP_48_TEAMS.items():
                     team_list = list(teams.values())
-                    # 每個小組內進行 6 場循環賽 (每隊打 3 場)
+                    # 每個小組進行 6 場循環賽
                     for i in range(len(team_list)):
                         for j in range(i + 1, len(team_list)):
-                            ta, tb = team_list[i], team_list[j]
+                            # 🎯 投注對調優化：完美同步單場預測的變數結構
+                            tb, ta = team_list[i], team_list[j]
                             ta_eng, tb_eng = TEAM_CH_TO_ENG[ta], TEAM_CH_TO_ENG[tb]
                             
-                            # 1. 抓取最原始戰力係數
                             stats_a = TEAM_ADVANCED_STATS.get(ta_eng, [1.0, 1.0])
                             stats_b = TEAM_ADVANCED_STATS.get(tb_eng, [1.0, 1.0])
                             
+                            # 1. 嚴格提取純浮點數，阻絕 Array 交叉污染 Bug
                             att_a, def_a = float(stats_a[0]), float(stats_a[1])
                             att_b, def_b = float(stats_b[0]), float(stats_b[1])
                             
-                            # 2. 僅東道主享有 10% 主場加成
+                            # 2. 東道主限制主場優勢 (僅美墨加享有 1.10)
                             home_adv_a = 1.10 if ta_eng in ["USA", "Mexico", "Canada"] else 1.00
                             home_adv_b = 1.10 if tb_eng in ["USA", "Mexico", "Canada"] else 1.00
                             
-                            # 3. 交叉計算 λ
-                            la = GLOBAL_AVG_GOALS * att_a * def_b * home_adv_a
-                            lb = GLOBAL_AVG_GOALS * att_b * def_a * home_adv_b
+                            # 3. 基礎期望值交叉相乘 (主攻 * 客防)
+                            lambda_a = GLOBAL_AVG_GOALS * att_a * def_b * home_adv_a
+                            lambda_b = GLOBAL_AVG_GOALS * att_b * def_a * home_adv_b
                             
-                            # 4. 完美套用單場修正：1.5倍戰意加成
-                            if att_a / att_b > 1.5:
-                                la *= 1.15
-                                lb *= 0.88
-                            elif att_b / att_a > 1.5:
-                                lb *= 1.15
-                                la *= 0.88
+                            # =======================================================
+                            # 🎯 戰意、神鋒與新賽制大巴機制（完整分組賽模擬同步互斥版）
+                            # =======================================================
+                            ratio_a_b = att_a / att_b
+                            ratio_b_a = att_b / att_a
+                            
+                            # 嚴格與單場預測同步，一場虛擬對戰只觸發一種戰術加成
+                            if ratio_a_b > 1.6:
+                                lambda_a *= 0.85  
+                                lambda_b *= 0.50  
+                            elif ratio_b_a > 1.6:
+                                lambda_b *= 0.85
+                                lambda_a *= 0.50
                                 
-                            # 5. 完美套用單場修正：神鋒暴走機制
-                            if att_a > 1.40 and def_b > 1.10:
-                                la *= 1.25
-                                lb *= 0.85
+                            elif ratio_a_b > 1.5:
+                                lambda_a *= 1.15
+                                lambda_b *= 0.88
+                            elif ratio_b_a > 1.5:
+                                lambda_b *= 1.15
+                                lambda_a *= 0.88
+                                
+                            elif att_a > 1.40 and def_b > 1.10:
+                                lambda_a *= 1.25
+                                lambda_b *= 0.85
                             elif att_b > 1.40 and def_a > 1.10:
-                                lb *= 1.25
-                                la *= 0.85
-                                
-                            # 6. 通過卜瓦松隨機抽樣模擬單場真實比分
-                            score_a = np.random.poisson(la)
-                            score_b = np.random.poisson(lb)
+                                lambda_b *= 1.25
+                                lambda_a *= 0.85
+
+                            
+                            # 6. 使用修正後的 λ 通過卜瓦松隨機抽樣得出該場比分
+                            score_a = np.random.poisson(lambda_a)
+                            score_b = np.random.poisson(lambda_b)
                             
                             # 7. 積分榜數據累加
                             sim_standings[grp][ta]["gf"] += score_a
@@ -299,25 +332,24 @@ elif mode == "完整分組賽模擬":
                                 sim_standings[grp][ta]["points"] += 1
                                 sim_standings[grp][tb]["points"] += 1
                 
-                # 每輪全量模擬結束後，判定每組的前兩名 (2026新賽制小組前2直接晉級)
+                # 判定 12 個小組的前兩名晉級十六強
+                # 判定 12 個小組的前兩名晉級十六強
                 for grp, teams_data in sim_standings.items():
-                    # 排序規則：積分 > 淨勝球 > 總進球數
                     sorted_teams = sorted(
                         teams_data.items(),
                         key=lambda x: (x[1]["points"], x[1]["gf"] - x[1]["ga"], x[1]["gf"]),
                         reverse=True
                     )
-                    # 記錄小組第一與小組第二的晉級次數
-                    advance_counts[sorted_teams[0][0]] += 1
-                    advance_counts[sorted_teams[1][0]] += 1
+                    top1_team = sorted_teams[0][0]
+                    top2_team = sorted_teams[1][0]
+                    advance_counts[top1_team] += 1
+                    advance_counts[top2_team] += 1
         
-        st.success(f"🎉 已成功執行完畢 {sim_runs} 次分組賽完整演練！")
+        st.success(f"🎉 已成功更新同步！並順利執行完畢 {sim_runs} 次分組賽完整演練！")
         
-        # 格式化輸出結果
-        st.write("### 📊 AI 預測各小組十六強晉級機率榜")
+        # 畫面優雅渲染
+        st.write("### 📊 AI 預測各小組十六強晉級機率榜 (新賽制擺大巴同步版)")
         display_cols = st.columns(3)
-        
-        # 將 12 個小組均勻分配到 3 個垂直欄位進行優雅展現
         for idx, (grp, teams) in enumerate(WORLD_CUP_48_TEAMS.items()):
             col_target = display_cols[idx % 3]
             with col_target:
@@ -330,9 +362,10 @@ elif mode == "完整分組賽模擬":
                 df_grp = pd.DataFrame(grp_res).sort_values(by="_raw", ascending=False).drop(columns=["_raw"])
                 st.dataframe(df_grp, use_container_width=True, hide_index=True)
 
-# 模式 3：戰力數據總覽
+# 模式 3：戰力數據總覽（與左側完全切齊，不留空格！）
 elif mode == "戰力數據總覽":
     st.header("📊 2026 世界盃參賽球隊 AI 戰力指數總覽")
+
     st.write("底層雙維度特徵矩陣：進攻指數越高代表進攻火力越猛；防守脆弱度越低代表防線越穩固。")
     
     # 重新整理 DataFrame 排行榜
